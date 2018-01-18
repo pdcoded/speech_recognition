@@ -1,6 +1,5 @@
 """Script to illustrate usage of tf.estimator.Estimator in TF v1.3"""
 import tensorflow as tf
-
 from tensorflow.examples.tutorials.mnist import input_data as mnist_data
 from tensorflow.contrib import slim
 from tensorflow.contrib.learn import ModeKeys
@@ -222,7 +221,9 @@ def get_train_inputs(batch_size, mnist_data):
         with tf.name_scope('Training_data'):
             # Get Mnist data
             images = mnist_data.train.images.reshape([-1, 28, 28, 1])
+            print type(images)
             labels = mnist_data.train.labels
+            print type(labels)
             # Define placeholders
             images_placeholder = tf.placeholder(
                 images.dtype, images.shape)
@@ -247,6 +248,7 @@ def get_train_inputs(batch_size, mnist_data):
 
     # Return function and hook
     return train_inputs, iterator_initializer_hook
+
 
 
 def get_test_inputs(batch_size, mnist_data):

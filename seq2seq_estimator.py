@@ -1,4 +1,6 @@
 """Script to illustrate usage of tf.estimator.Estimator in TF v1.3"""
+## A good place to start tf estimators - https://medium.com/onfido-tech/higher-level-apis-in-tensorflow-67bfb602e6c0
+## Multigpu setting with estimators- cifar example https://github.com/tensorflow/models/blob/master/tutorials/image/cifar10_estimator/cifar10_utils.py
 import tensorflow as tf
 from tensorflow.contrib import slim
 from tensorflow.contrib.learn import ModeKeys
@@ -13,10 +15,9 @@ from six.moves import range
 from util.text import sparse_tensor_value_to_texts, wer
 from tensorflow.contrib.rnn import BasicRNNCell, BasicLSTMCell, MultiRNNCell, GRUCell
 from tensorflow.python.layers import core as layers_core
-
+from dataset_util_tf import pipeline
 # Show debugging output
 tf.logging.set_verbosity(tf.logging.DEBUG)
-
 # ****** Data ****** #
 tf.reset_default_graph()
 sess = tf.InteractiveSession()
@@ -24,6 +25,13 @@ sess = tf.InteractiveSession()
 SPACE_TOKEN = '<space>'
 SPACE_INDEX = 2
 FIRST_INDEX = ord('a') - 3 # 0 is reserved to space
+
+PAD = 0
+EOS = 1
+vocab_size = 29
+input_embedding_size = 26
+encoder_hidden_units = 100
+decoder_hidden_units = 100
 
 def text_to_char_array(original):
     result = original.replace(" '", "")
@@ -35,9 +43,9 @@ def text_to_char_array(original):
     return result
 
 #print text_to_char_array("   jello")
-
-train = pd.read_csv('./real_batch/clean-test_dev-combined.csv')
-train = train.head(2)  #overfitting  it for 2 file
+data = pd.read_csv('./real_batch/general_100.csv')
+train = data.head(10)  #overfitting  it for 2 file
+test = data.tail(10)
 print train['transcript']
 
 # Set default flags for the output directories
@@ -89,11 +97,9 @@ def experiment_fn(run_config, params):
     # Define the model
     estimator = get_estimator(run_config, params)
     # Setup data loaders
-    mnist = mnist_data.read_data_sets(FLAGS.data_dir, one_hot=False)
-    train_input_fn, train_input_hook = get_train_inputs(
-        batch_size=128, mnist_data=mnist)
-    eval_input_fn, eval_input_hook = get_test_inputs(
-        batch_size=128, mnist_data=mnist)
+    #mnist = mnist_data.read_data_sets(FLAGS.data_dir, one_hot=False)
+    train_input_fn, train_input_hook = get_train_inputs(1, train)
+    eval_input_fn, eval_input_hook = get_test_inputs(1, train)
     # Define the experiment
     experiment = tf.contrib.learn.Experiment(
         estimator=estimator,  # Estimator
@@ -134,21 +140,21 @@ def model_fn(features, labels, mode, params):
     """
     is_training = mode == ModeKeys.TRAIN
     # Define model's architecture
-    logits = architecture(features, is_training=is_training)
-    predictions = tf.argmax(logits, axis=-1)
+    decoder_logits = architecture(features, is_training=is_training)[0]
+    decoder_predictions = architecture(features,is_training=is_training)[1]
     # Loss, training and eval operations are not needed during inference.
     loss = None
     train_op = None
     eval_metric_ops = {}
     if mode != ModeKeys.INFER:
-        loss = tf.losses.sparse_softmax_cross_entropy(
-            labels=tf.cast(labels, tf.int32),
-            logits=logits)
+        loss = tf.nn.softmax_cross_entropy_with_logits(
+            labels=tf.one_hot(decoder_targets, depth=vocab_size, dtype=tf.float32),
+            logits=decoder_logits)
         train_op = get_train_op_fn(loss, params)
         eval_metric_ops = get_eval_metric_ops(labels, predictions)
     return tf.estimator.EstimatorSpec(
         mode=mode,
-        predictions=predictions,
+        predictions=decoder_predictions,
         loss=loss,
         train_op=train_op,
         eval_metric_ops=eval_metric_ops
@@ -186,8 +192,8 @@ def get_eval_metric_ops(labels, predictions):
             name='accuracy')
     }
 
-
-def architecture(inputs, is_training, scope='seq2seq'):
+    
+def architecture(inputs_,is_training,scope='seq2seq'):
     """Return the output operation following the network architecture.
     Args:
         inputs (Tensor): Input Tensor
@@ -196,26 +202,41 @@ def architecture(inputs, is_training, scope='seq2seq'):
     Returns:
          Logits output Op for the network.
     """
-    with tf.variable_scope(scope):
-        with slim.arg_scope(
-                [slim.conv2d, slim.fully_connected],
-                weights_initializer=tf.contrib.layers.xavier_initializer()):
-            net = slim.conv2d(inputs, 20, [5, 5], padding='VALID',
-                              scope='conv1')
-            net = slim.max_pool2d(net, 2, stride=2, scope='pool2')
-            net = slim.conv2d(net, 40, [5, 5], padding='VALID',
-                              scope='conv3')
-            net = slim.max_pool2d(net, 2, stride=2, scope='pool4')
-            net = tf.reshape(net, [-1, 4 * 4 * 40])
-            net = slim.fully_connected(net, 256, scope='fn5')
-            net = slim.dropout(net, is_training=is_training,
-                               scope='dropout5')
-            net = slim.fully_connected(net, 256, scope='fn6')
-            net = slim.dropout(net, is_training=is_training,
-                               scope='dropout6')
-            net = slim.fully_connected(net, 10, scope='output',
-                                       activation_fn=None)
-        return net
+    with tf.contrib.slim.arg_scope([tf.contrib.slim.model_variable, tf.contrib.slim.variable], device="/cpu:0"):
+
+        with tf.variable_scope('encoder_1') as scope:
+          # Build RNN cell
+          encoder_cell = tf.nn.rnn_cell.BasicLSTMCell(encoder_hidden_units)
+          print encoder_cell
+          # Run Dynamic RNN
+          #   encoder_outpus: [max_time, batch_size, num_units]
+          #   encoder_state: [batch_size, num_units]
+          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=inputs_,sequence_length=inputs_,time_major=True,dtype=tf.float64)
+          print encoder_state
+        with tf.variable_scope('decoder_1') as scope:
+
+          # attention_states: [batch_size, max_time, num_units]
+          attention_states = tf.transpose(encoder_outputs, [1, 0, 2])
+
+          decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(decoder_hidden_units)
+
+          # Create an attention mechanism
+          attention_mechanism = tf.contrib.seq2seq.LuongAttention(encoder_hidden_units,attention_states,memory_sequence_length=source_seq_length)
+          
+          attention_cell = tf.contrib.seq2seq.AttentionWrapper(cell=encoder_cell,attention_mechanism=attention_mechanism)
+
+          attention_zero = attention_cell.zero_state(batch_size=tf.shape(attention_states)[0], dtype=tf.float64)
+
+          decoder_cell = tf.contrib.seq2seq.AttentionWrapper(decoder_cell, attention_mechanism,attention_layer_size=encoder_hidden_units)
+          # Decoder
+          decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell,helper=helper,initial_state=attention_zero.clone(cell_state=encoder_state),output_layer=layers_core.Dense(vocab_size, use_bias=False))
+          # Dynamic decoding
+          decoder_outputs, _,_ = tf.contrib.seq2seq.dynamic_decode(decoder,output_time_major=True)
+
+          logits = decoder_outputs.rnn_output
+    return (logits,decoder_outputs.sample_id)
+        #Without the projection layer , logits shape would be [Time_Steps,batch_Size,hidden units]
+        #After dense projection, logits shape transforms to [ time_steps,batch_size,vocab_size]
 
 
 # Define data loaders #####################################
@@ -231,8 +252,9 @@ class IteratorInitializerHook(tf.train.SessionRunHook):
         self.iterator_initializer_func(session)
 
 
+
 # Define the training inputs
-def get_train_inputs(batch_size, mnist_data):
+def get_train_inputs(batch_size, train):
     """Return the input function to get the training data.
     Args:
         batch_size (int): Batch size of training iterator that is returned
@@ -252,36 +274,58 @@ def get_train_inputs(batch_size, mnist_data):
             on every evaluation
         """
         with tf.name_scope('Training_data'):
-            # Get Mnist data
-            images = mnist_data.train.images.reshape([-1, 28, 28, 1])
-            labels = mnist_data.train.labels
+            (feature,label)=pipeline(train)
+            print "hello"
+            #xt_encoder,xt_decoder_output= pipeline(test)
+
             # Define placeholders
-            images_placeholder = tf.placeholder(
-                images.dtype, images.shape)
-            labels_placeholder = tf.placeholder(
-                labels.dtype, labels.shape)
+            encoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='encoder_inputs')
+            decoder_targets = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_targets')
+
+            decoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_inputs')
+
+            embeddings = tf.Variable(tf.random_uniform([vocab_size, input_embedding_size], -1.0, 1.0,dtype=tf.float64), dtype=tf.float64)
+
+            encoder_inputs_embedded = tf.placeholder(shape=(None, None,26), dtype=tf.float64, name='encoder_inputs_embedded')
+            decoder_inputs_embedded = tf.nn.embedding_lookup(embeddings, decoder_inputs)
+
+            input_tensor = tf.placeholder(dtype=tf.float32, shape=[None, None, 26], name='input_tensor')
+            seq_len_tensor = tf.placeholder(dtype=tf.int32, shape=[None], name='input_length')
+
+            decoder_lengths = tf.placeholder(dtype=tf.int32, shape=[None], name='decoder_lengths')
+            #dec_inp= np.random.randn(len(transcript),batch_size,embedding_size).astype(np.float32)
+            #decoder_lengths = tf.ones(batch_size, dtype=tf.int32) * len(transcript)
+            helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
+            
             # Build dataset iterator
-            dataset = tf.contrib.data.Dataset.from_tensor_slices(
-                (images_placeholder, labels_placeholder))
+            #dataset = tf.data.Dataset.from_tensor_slices(([encoder_inputs_embedded,decoder_inputs,seq_len_tensor,decoder_lengths],decoder_targets))
+            dataset = tf.data.Dataset.from_tensor_slices((encoder_inputs_embedded,decoder_targets))
+
             dataset = dataset.repeat(None)  # Infinite iterations
-            dataset = dataset.shuffle(buffer_size=10000)
+            dataset = dataset.shuffle(buffer_size=100)
             dataset = dataset.batch(batch_size)
-            iterator = dataset.make_initializable_iterator()
-            next_example, next_label = iterator.get_next()
+            iterator = dataset.make_initializable_iterator() 
+            next_feature,next_label = iterator.get_next()
+            #({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets) = iterator.get_next()
+            #next_encoder_inputs_embedded,next_decoder_targets = iterator.get_next()
+
             # Set runhook to initialize iterator
+            #fd={encoder_inputs_embedded:xt_encoder,seq_len_tensor:sequence_length,decoder_lengths:decoder_length,decoder_inputs:xt_decoder_input,decoder_targets:xt_decoder_output}
             iterator_initializer_hook.iterator_initializer_func = \
                 lambda sess: sess.run(
                     iterator.initializer,
-                    feed_dict={images_placeholder: images,
-                               labels_placeholder: labels})
+                    feed_dict=fd)
             # Return batched (features, labels)
-            return next_example, next_label
+            return next_feature,next_label
+            #return ({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets)
 
+            #return next_encoder_inputs_embedded,next_decoder_targets
     # Return function and hook
     return train_inputs, iterator_initializer_hook
+            
 
 
-def get_test_inputs(batch_size, mnist_data):
+def get_test_inputs(batch_size, test):
     """Return the input function to get the test data.
     Args:
         batch_size (int): Batch size of training iterator that is returned
@@ -301,30 +345,54 @@ def get_test_inputs(batch_size, mnist_data):
             on every evaluation
         """
         with tf.name_scope('Test_data'):
-            # Get Mnist data
-            images = mnist_data.test.images.reshape([-1, 28, 28, 1])
-            labels = mnist_data.test.labels
+            (feature,label)=pipeline(test)
+            #xt_encoder,xt_decoder_output= pipeline(test)
+
             # Define placeholders
-            images_placeholder = tf.placeholder(
-                images.dtype, images.shape)
-            labels_placeholder = tf.placeholder(
-                labels.dtype, labels.shape)
+            encoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='encoder_inputs')
+            decoder_targets = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_targets')
+
+            decoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_inputs')
+
+            embeddings = tf.Variable(tf.random_uniform([vocab_size, input_embedding_size], -1.0, 1.0,dtype=tf.float64), dtype=tf.float64)
+
+            encoder_inputs_embedded = tf.placeholder(shape=(None, None,26), dtype=tf.float64, name='encoder_inputs_embedded')
+            decoder_inputs_embedded = tf.nn.embedding_lookup(embeddings, decoder_inputs)
+
+            input_tensor = tf.placeholder(dtype=tf.float32, shape=[None, None, 26], name='input_tensor')
+            seq_len_tensor = tf.placeholder(dtype=tf.int32, shape=[None], name='input_length')
+
+            decoder_lengths = tf.placeholder(dtype=tf.int32, shape=[None], name='decoder_lengths')
+            #dec_inp= np.random.randn(len(transcript),batch_size,embedding_size).astype(np.float32)
+            #decoder_lengths = tf.ones(batch_size, dtype=tf.int32) * len(transcript)
+            helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
+            
             # Build dataset iterator
-            dataset = tf.contrib.data.Dataset.from_tensor_slices(
-                (images_placeholder, labels_placeholder))
+            #dataset = tf.data.Dataset.from_tensor_slices(([encoder_inputs_embedded,decoder_inputs,seq_len_tensor,decoder_lengths],decoder_targets))
+            dataset = tf.data.Dataset.from_tensor_slices((encoder_inputs_embedded,decoder_targets))
+
+            dataset = dataset.repeat(None)  # Infinite iterations
+            dataset = dataset.shuffle(buffer_size=100)
             dataset = dataset.batch(batch_size)
-            iterator = dataset.make_initializable_iterator()
-            next_example, next_label = iterator.get_next()
+            iterator = dataset.make_initializable_iterator() 
+            next_feature,next_label = iterator.get_next()
+            #({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets) = iterator.get_next()
+            #next_encoder_inputs_embedded,next_decoder_targets = iterator.get_next()
+
             # Set runhook to initialize iterator
+            #fd={encoder_inputs_embedded:xt_encoder,seq_len_tensor:sequence_length,decoder_lengths:decoder_length,decoder_inputs:xt_decoder_input,decoder_targets:xt_decoder_output}
             iterator_initializer_hook.iterator_initializer_func = \
                 lambda sess: sess.run(
                     iterator.initializer,
-                    feed_dict={images_placeholder: images,
-                               labels_placeholder: labels})
-            return next_example, next_label
+                    feed_dict=fd)
+            # Return batched (features, labels)
+            return next_feature,next_label
+            #return ({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets)
 
+            #return next_encoder_inputs_embedded,next_decoder_targets
     # Return function and hook
     return test_inputs, iterator_initializer_hook
+            
 
 
 # Run script ##############################################

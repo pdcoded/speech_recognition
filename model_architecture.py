@@ -28,8 +28,8 @@ def model(encoder_inputs_,source_seq_length,decoder_inputs,decoder_lengths):
           #   encoder_outpus: [max_time, batch_size, num_units]
           #   encoder_state: [batch_size, num_units]
           encoder_outputs,encoder_state= tf.nn.dynamic_rnn(encoder_cell,inputs=encoder_inputs_,sequence_length=source_seq_length,time_major=True,dtype=tf.float64)
+        
         with tf.variable_scope('decoder_1') as scope:
-
           # attention_states: [batch_size, max_time, num_units]
           attention_states = tf.transpose(encoder_outputs, [1, 0, 2])
 

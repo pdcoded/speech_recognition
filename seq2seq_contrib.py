@@ -41,8 +41,8 @@ decoder_length=[]
 sequence_length=[]
 for ind,row in train.iterrows():
   inputs_encoder.append(audiofile_to_input_vector(row['wav_filename'],26,0))
-  inputs_decoder.append(np.append([0],text_to_char_array(row['transcript'])))
-  outputs_decoder.append(np.append(text_to_char_array(row['transcript']),[0]))
+  inputs_decoder.append(np.append([1],text_to_char_array(row['transcript'])))
+  outputs_decoder.append(np.append(text_to_char_array(row['transcript']),[1]))
   sequence_length.append(audiofile_to_input_vector(row['wav_filename'],26,0).shape[0])
   decoder_length.append(len(row['transcript'])+1)
 
@@ -61,7 +61,6 @@ print xt_encoder.shape
 print xt_decoder_input.shape
 print xt_decoder_output.shape
 
-
 PAD = 0
 EOS = 1
 
@@ -70,8 +69,6 @@ input_embedding_size = 26
 
 encoder_hidden_units = 200
 decoder_hidden_units = encoder_hidden_units
-
-
 
 encoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='encoder_inputs')
 decoder_targets = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_targets')
@@ -91,7 +88,7 @@ decoder_lengths = tf.placeholder(dtype=tf.int32, shape=[None], name='decoder_len
 #decoder_lengths = tf.ones(batch_size, dtype=tf.int32) * len(transcript)
 helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
 
-def model(encoder_inputs_,source_seq_length,decoder_inputs,decoder_lengths):
+def model(encoder_inputs,source_seq_length,decoder_inputs,decoder_lengths):
     with tf.contrib.slim.arg_scope([tf.contrib.slim.model_variable, tf.contrib.slim.variable], device="/cpu:0"):
 
         with tf.variable_scope('encoder_1') as scope:
@@ -100,7 +97,7 @@ def model(encoder_inputs_,source_seq_length,decoder_inputs,decoder_lengths):
           # Run Dynamic RNN
           #   encoder_outpus: [max_time, batch_size, num_units]
           #   encoder_state: [batch_size, num_units]
-          encoder_outputs,encoder_state= tf.nn.dynamic_rnn(encoder_cell,inputs=encoder_inputs_,sequence_length=source_seq_length,time_major=True,dtype=tf.float64)
+          encoder_outputs,encoder_state= tf.nn.dynamic_rnn(encoder_cell,inputs=encoder_inputs,sequence_length=source_seq_length,time_major=True,dtype=tf.float64)
         with tf.variable_scope('decoder_1') as scope:
 
           # attention_states: [batch_size, max_time, num_units]
@@ -150,6 +147,7 @@ def ndarray_to_text(value):
     for i in range(len(value)):
         results += chr(value[i] + FIRST_INDEX)
     results = results.replace('^','')
+    results=results.replace('_','u')
     return results.replace('`', ' ')
 
 
