@@ -15,16 +15,13 @@ from six.moves import range
 from util.text import sparse_tensor_value_to_texts, wer
 from tensorflow.contrib.rnn import BasicRNNCell, BasicLSTMCell, MultiRNNCell, GRUCell
 from tensorflow.python.layers import core as layers_core
-from dataset_util_tf import pipeline
+#from dataset_util_tf import pipeline
+from datapipeline import read_dataset
 # Show debugging output
 tf.logging.set_verbosity(tf.logging.DEBUG)
 # ****** Data ****** #
 tf.reset_default_graph()
 sess = tf.InteractiveSession()
-
-SPACE_TOKEN = '<space>'
-SPACE_INDEX = 2
-FIRST_INDEX = ord('a') - 3 # 0 is reserved to space
 
 PAD = 0
 EOS = 1
@@ -33,20 +30,11 @@ input_embedding_size = 26
 encoder_hidden_units = 100
 decoder_hidden_units = 100
 
-def text_to_char_array(original):
-    result = original.replace(" '", "")
-    result = result.replace("'", "")
-    result = result.replace(' ', '  ')
-    result = result.split(' ')
-    result = np.hstack([SPACE_TOKEN if xt == '' else list(xt) for xt in result])
-    result = np.asarray([SPACE_INDEX if xt == SPACE_TOKEN else ord(xt) - FIRST_INDEX for xt in result])
-    return result
-
 #print text_to_char_array("   jello")
 data = pd.read_csv('./real_batch/general_100.csv')
 train = data.head(10)  #overfitting  it for 2 file
 test = data.tail(10)
-print train['transcript']
+#print train['transcript']
 
 # Set default flags for the output directories
 FLAGS = tf.app.flags.FLAGS
@@ -207,12 +195,13 @@ def architecture(inputs_,is_training,scope='seq2seq'):
         with tf.variable_scope('encoder_1') as scope:
           # Build RNN cell
           encoder_cell = tf.nn.rnn_cell.BasicLSTMCell(encoder_hidden_units)
-          print encoder_cell
+          #print encoder_cell
           # Run Dynamic RNN
           #   encoder_outpus: [max_time, batch_size, num_units]
           #   encoder_state: [batch_size, num_units]
-          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=inputs_,sequence_length=inputs_,time_major=True,dtype=tf.float64)
-          print encoder_state
+          #seq_length = tf.cast(inputs_['C'],tf.int32)
+          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=inputs_,sequence_length=seq_length,time_major=True,dtype=tf.float64)
+          #print encoder_state
         with tf.variable_scope('decoder_1') as scope:
 
           # attention_states: [batch_size, max_time, num_units]
@@ -221,7 +210,7 @@ def architecture(inputs_,is_training,scope='seq2seq'):
           decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(decoder_hidden_units)
 
           # Create an attention mechanism
-          attention_mechanism = tf.contrib.seq2seq.LuongAttention(encoder_hidden_units,attention_states,memory_sequence_length=source_seq_length)
+          attention_mechanism = tf.contrib.seq2seq.LuongAttention(encoder_hidden_units,attention_states,memory_sequence_length=inputs_[0][0])
           
           attention_cell = tf.contrib.seq2seq.AttentionWrapper(cell=encoder_cell,attention_mechanism=attention_mechanism)
 
@@ -274,53 +263,55 @@ def get_train_inputs(batch_size, train):
             on every evaluation
         """
         with tf.name_scope('Training_data'):
-            (feature,label)=pipeline(train)
+            mfccs, decoder_ins, decoder_tars,seq_length,decoder_length =read_dataset('./real_batch/general_100.csv',num_epochs = 20, batch_size = 10)
             print "hello"
             #xt_encoder,xt_decoder_output= pipeline(test)
 
             # Define placeholders
-            encoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='encoder_inputs')
-            decoder_targets = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_targets')
+            #encoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='encoder_inputs')
+            decoder_targets = tf.placeholder(shape=(None, None), dtype=tf.int64, name='decoder_targets')
 
-            decoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int32, name='decoder_inputs')
+            decoder_inputs = tf.placeholder(shape=(None, None), dtype=tf.int64, name='decoder_inputs')
 
-            embeddings = tf.Variable(tf.random_uniform([vocab_size, input_embedding_size], -1.0, 1.0,dtype=tf.float64), dtype=tf.float64)
+            embeddings = tf.Variable(tf.random_uniform([vocab_size, input_embedding_size], -1.0, 1.0,dtype=tf.float32), dtype=tf.float32)
 
-            encoder_inputs_embedded = tf.placeholder(shape=(None, None,26), dtype=tf.float64, name='encoder_inputs_embedded')
+            encoder_inputs_embedded = tf.placeholder(shape=[None, None,26], dtype=tf.float32, name='encoder_inputs_embedded')
             decoder_inputs_embedded = tf.nn.embedding_lookup(embeddings, decoder_inputs)
 
-            input_tensor = tf.placeholder(dtype=tf.float32, shape=[None, None, 26], name='input_tensor')
-            seq_len_tensor = tf.placeholder(dtype=tf.int32, shape=[None], name='input_length')
+            #input_tensor = tf.placeholder(dtype=tf.float32, shape=[None, None, 26], name='input_tensor')
+            seq_len_tensor = tf.placeholder(dtype=tf.int64, shape=[None], name='input_length')
 
-            decoder_lengths = tf.placeholder(dtype=tf.int32, shape=[None], name='decoder_lengths')
+            decoder_lengths = tf.placeholder(dtype=tf.int64, shape=[None], name='decoder_lengths')
             #dec_inp= np.random.randn(len(transcript),batch_size,embedding_size).astype(np.float32)
             #decoder_lengths = tf.ones(batch_size, dtype=tf.int32) * len(transcript)
-            helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
+            #helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
             
             # Build dataset iterator
-            #dataset = tf.data.Dataset.from_tensor_slices(([encoder_inputs_embedded,decoder_inputs,seq_len_tensor,decoder_lengths],decoder_targets))
-            dataset = tf.data.Dataset.from_tensor_slices((encoder_inputs_embedded,decoder_targets))
+            dataset = tf.data.Dataset.from_tensor_slices((encoder_inputs_embedded,decoder_inputs_embedded,seq_len_tensor,decoder_lengths,decoder_targets))
+            #dataset = tf.data.Dataset.from_tensor_slices((encoder_inputs_embedded,decoder_targets))
 
             dataset = dataset.repeat(None)  # Infinite iterations
             dataset = dataset.shuffle(buffer_size=100)
             dataset = dataset.batch(batch_size)
             iterator = dataset.make_initializable_iterator() 
-            next_feature,next_label = iterator.get_next()
+            #next_feature,next_label = iterator.get_next()
             #({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets) = iterator.get_next()
             #next_encoder_inputs_embedded,next_decoder_targets = iterator.get_next()
 
             # Set runhook to initialize iterator
-            #fd={encoder_inputs_embedded:xt_encoder,seq_len_tensor:sequence_length,decoder_lengths:decoder_length,decoder_inputs:xt_decoder_input,decoder_targets:xt_decoder_output}
+            fd={encoder_inputs_embedded:mfccs,seq_len_tensor:seq_length,decoder_lengths:decoder_length,decoder_inputs:decoder_ins,decoder_targets:decoder_tars}
             iterator_initializer_hook.iterator_initializer_func = \
                 lambda sess: sess.run(
                     iterator.initializer,
                     feed_dict=fd)
             # Return batched (features, labels)
-            return next_feature,next_label
+            print 'done'
+            return  iterator.get_next()
             #return ({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets)
 
             #return next_encoder_inputs_embedded,next_decoder_targets
     # Return function and hook
+    print 'inputs sent'
     return train_inputs, iterator_initializer_hook
             
 
@@ -384,7 +375,7 @@ def get_test_inputs(batch_size, test):
             iterator_initializer_hook.iterator_initializer_func = \
                 lambda sess: sess.run(
                     iterator.initializer,
-                    feed_dict=fd)
+                    feed_dict={encoder_inputs_embedded:feature['A'],decoder_targets:feature['B']})
             # Return batched (features, labels)
             return next_feature,next_label
             #return ({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets)
@@ -400,3 +391,9 @@ if __name__ == "__main__":
     tf.app.run(
         main=run_experiment
     )
+
+
+
+'''if __name__ == "__main__":
+    train_input_fn, train_input_hook = get_train_inputs(2, train)
+    print train_input_fn()'''
