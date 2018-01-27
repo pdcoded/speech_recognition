@@ -14,7 +14,7 @@ def audio_mfcc(wav_filename):
 	#wav_filename = '../../quantiphi_work/c9_cloudml/real_batch/wav/'+ basename(wav_filename)
 	freq, signal = wav.read(wav_filename)
 	mfcc_features = mfcc(signal,freq,numcep=26)
-	mfcc_features = np.asarray(mfcc_features, dtype = np.float32)
+	mfcc_features = np.asarray(mfcc_features, dtype = np.float64)
 	return mfcc_features
 
 def normalize_mfccs(features):
@@ -37,13 +37,13 @@ def decoder_target(trans_array):
 
 
 def data_preprocessing(line):
-	parsed_args = tf.decode_csv(line,[['tf.string'],['tf.string'],['tf.int32']])
+	parsed_args = tf.decode_csv(line,[['tf.string'],['tf.string'],['tf.int64']])
 	#transcript,wav_filename,duration
 	wav_filename = parsed_args[1]
 	transcript = parsed_args[0:1]
 	duration = parsed_args[2]
-	mfccs = tf.py_func(audio_mfcc, [wav_filename],tf.float32)
-	mfccs = tf.py_func(normalize_mfccs,[mfccs],tf.float32)
+	mfccs = tf.py_func(audio_mfcc, [wav_filename],tf.float64)
+	mfccs = tf.py_func(normalize_mfccs,[mfccs],tf.float64)
 	transcript = tf.py_func(transcript_array,transcript,tf.int64)
 	seq_length = tf.py_func(lambda x: np.asarray([x.shape[0]]), [mfccs], tf.int64)
 	decoder_length = tf.py_func(lambda x: np.asarray([x.shape[0]]),[transcript],tf.int64)
@@ -59,10 +59,14 @@ def read_dataset(filename,num_epochs, batch_size):
 	dataset = dataset.repeat(num_epochs)
 	dataset = dataset.padded_batch(batch_size = batch_size, padded_shapes = ([None,26],[None,],[None,],[None,],[None,]))
 	iterator = dataset.make_one_shot_iterator()
-	features, decoder_inputs, decoder_targets,seq_length,decoder_length = iterator.get_next()
+	mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length = iterator.get_next()
 	#features, transcript, decoder_inputs = iterator.get_next()
-	return features, decoder_inputs, decoder_targets,seq_length,decoder_length
+	return mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length
 
+"""
+with tf.Session() as sess:
+	print sess.run(read_dataset('./real_batch/general_100.csv',num_epochs = 20, batch_size = 10))
+"""
 
 """with tf.Session() as sess:
 	features, decoder_inputs, decoder_targets,seq_length,decoder_length = sess.run(read_dataset('./real_batch/general_100.csv'))
