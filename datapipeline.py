@@ -35,6 +35,12 @@ def decoder_input(trans_array):
 def decoder_target(trans_array):
 	return np.insert(trans_array,trans_array.shape[0],1)
 
+def dict_features(mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length):
+	features = {'encoder_inputs':mfccs,'decoder_inputs':decoder_inputs,'decoder_length':decoder_length,'seq_length':seq_length}
+	labels = decoder_targets
+	return features, labels
+
+
 
 def data_preprocessing(line):
 	parsed_args = tf.decode_csv(line,[['tf.string'],['tf.string'],['tf.int32']])
@@ -53,26 +59,25 @@ def data_preprocessing(line):
 	return mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length
 	#return mfccs, transcript
 
-def read_dataset(filename,num_epochs, batch_size):
+def read_dataset(filename,batch_size):
 	dataset = tf.contrib.data.TextLineDataset(filename).skip(1)
 	dataset = dataset.map(data_preprocessing)
-	dataset = dataset.repeat(num_epochs)
+	#dataset = dataset.repeat()
 	dataset = dataset.padded_batch(batch_size = batch_size, padded_shapes = ([None,26],[None,],[None,],[None,],[None,]))
+	#dataset = dataset.map(dict_features)
 	iterator = dataset.make_one_shot_iterator()
-	features, decoder_inputs, decoder_targets,seq_length,decoder_length = iterator.get_next()
-	#features, transcript, decoder_inputs = iterator.get_next()
-	return features, decoder_inputs, decoder_targets,seq_length,decoder_length
+	mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length = iterator.get_next()
+	#features, targets = iterator.get_next()
+	return mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length
+	#return features, targets
 
 
-"""with tf.Session() as sess:
-	features, decoder_inputs, decoder_targets,seq_length,decoder_length = sess.run(read_dataset('./real_batch/general_100.csv'))
-	#features, trans,ins = sess.run(read_dataset('./small_train2.csv'))
-	print features.shape
-	#print trans.shape
-	print decoder_inputs.shape
-	print decoder_targets.shape
-	print seq_length
-	print decoder_length
+'''with tf.Session() as sess:
+	#mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length = sess.run(read_dataset('./real_batch/general_100.csv', 10,1000))
+	features, trans = sess.run(read_dataset('./real_batch/general_100.csv', 3))
+	print features
+	print trans.shape
+	#print targets.shape
 
 data = pd.read_csv('./small_train2.csv')
 data.wav_filename = data.wav_filename.apply(audio_mfcc)
@@ -81,4 +86,4 @@ data.transcript = data.transcript.apply(decoder_input)
 data.transcript = data.transcript.apply(decoder_target)
 
 #print data.wav_filename[0].shape
-print data.transcript[1]"""
+print data.transcript[1]'''
