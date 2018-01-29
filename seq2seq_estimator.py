@@ -128,8 +128,8 @@ def model_fn(features, labels, mode, params):
     """
     is_training = mode == ModeKeys.TRAIN
     # Define model's architecture
-    decoder_logits = architecture(features, is_training=is_training)[0]
-    decoder_predictions = architecture(features,is_training=is_training)[1]
+    (decoder_logits, decoder_predictions) = architecture(features, is_training=is_training)
+    
     # Loss, training and eval operations are not needed during inference.
     loss = None
     train_op = None
@@ -190,6 +190,13 @@ def architecture(inputs_,is_training,scope='seq2seq'):
     Returns:
          Logits output Op for the network.
     """
+    #{'encoder_inputs':mfccs,'decoder_inputs':decoder_inputs,'decoder_length':decoder_length,'seq_length':seq_length}
+    #encoder_inputs_embedded,decoder_inputs_embedded,seq_len_tensor,decoder_lengths = inputs_[0]
+    print inputs_
+    encoder_inputs_embedded = inputs_['encoder_inputs']
+    decoder_inputs_embedded = inputs_['decoder_inputs']
+    seq_len_tensor = inputs_['seq_length']
+    decoder_lengths = inputs_['decoder_length']
     with tf.contrib.slim.arg_scope([tf.contrib.slim.model_variable, tf.contrib.slim.variable], device="/cpu:0"):
 
         with tf.variable_scope('encoder_1') as scope:
@@ -200,7 +207,7 @@ def architecture(inputs_,is_training,scope='seq2seq'):
           #   encoder_outpus: [max_time, batch_size, num_units]
           #   encoder_state: [batch_size, num_units]
           #seq_length = tf.cast(inputs_['C'],tf.int32)
-          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=inputs_,sequence_length=seq_length,time_major=True,dtype=tf.float64)
+          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=encoder_inputs_embedded,sequence_length=seq_len_tensor,time_major=True,dtype=tf.float64)
           #print encoder_state
         with tf.variable_scope('decoder_1') as scope:
 
@@ -210,7 +217,7 @@ def architecture(inputs_,is_training,scope='seq2seq'):
           decoder_cell = tf.nn.rnn_cell.BasicLSTMCell(decoder_hidden_units)
 
           # Create an attention mechanism
-          attention_mechanism = tf.contrib.seq2seq.LuongAttention(encoder_hidden_units,attention_states,memory_sequence_length=inputs_[0][0])
+          attention_mechanism = tf.contrib.seq2seq.LuongAttention(encoder_hidden_units,attention_states,memory_sequence_length=seq_len_tensor)
           
           attention_cell = tf.contrib.seq2seq.AttentionWrapper(cell=encoder_cell,attention_mechanism=attention_mechanism)
 
@@ -218,6 +225,7 @@ def architecture(inputs_,is_training,scope='seq2seq'):
 
           decoder_cell = tf.contrib.seq2seq.AttentionWrapper(decoder_cell, attention_mechanism,attention_layer_size=encoder_hidden_units)
           # Decoder
+          helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
           decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell,helper=helper,initial_state=attention_zero.clone(cell_state=encoder_state),output_layer=layers_core.Dense(vocab_size, use_bias=False))
           # Dynamic decoding
           decoder_outputs, _,_ = tf.contrib.seq2seq.dynamic_decode(decoder,output_time_major=True)
@@ -240,7 +248,10 @@ class IteratorInitializerHook(tf.train.SessionRunHook):
         """Initialise the iterator after the session has been created."""
         self.iterator_initializer_func(session)
 
-
+def dict_features(mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length):
+    features = {'encoder_inputs':mfccs,'decoder_inputs':decoder_inputs,'decoder_length':decoder_length,'seq_length':seq_length}
+    labels = decoder_targets
+    return features, labels
 
 # Define the training inputs
 def get_train_inputs(batch_size, train):
@@ -263,7 +274,7 @@ def get_train_inputs(batch_size, train):
             on every evaluation
         """
         with tf.name_scope('Training_data'):
-            mfccs, decoder_ins, decoder_tars,seq_length,decoder_length =read_dataset('./real_batch/general_100.csv',num_epochs = 20, batch_size = 10)
+            mfccs, decoder_ins, decoder_tars,seq_length,decoder_length =read_dataset('./real_batch/general_100.csv',batch_size = 90)
             print "hello"
             #xt_encoder,xt_decoder_output= pipeline(test)
 
@@ -291,6 +302,7 @@ def get_train_inputs(batch_size, train):
             #dataset = tf.data.Dataset.from_tensor_slices((encoder_inputs_embedded,decoder_targets))
 
             dataset = dataset.repeat(None)  # Infinite iterations
+            dataset = dataset.map(dict_features)
             dataset = dataset.shuffle(buffer_size=100)
             dataset = dataset.batch(batch_size)
             iterator = dataset.make_initializable_iterator() 
@@ -336,7 +348,8 @@ def get_test_inputs(batch_size, test):
             on every evaluation
         """
         with tf.name_scope('Test_data'):
-            (feature,label)=pipeline(test)
+            mfccs, decoder_ins, decoder_tars,seq_length,decoder_length =read_dataset('./real_batch/general_100.csv',batch_size = 90)
+            #(feature,label)=pipeline(test)
             #xt_encoder,xt_decoder_output= pipeline(test)
 
             # Define placeholders
@@ -364,6 +377,7 @@ def get_test_inputs(batch_size, test):
 
             dataset = dataset.repeat(None)  # Infinite iterations
             dataset = dataset.shuffle(buffer_size=100)
+            dataset = dataset.map(dict_features)
             dataset = dataset.batch(batch_size)
             iterator = dataset.make_initializable_iterator() 
             next_feature,next_label = iterator.get_next()
@@ -372,10 +386,11 @@ def get_test_inputs(batch_size, test):
 
             # Set runhook to initialize iterator
             #fd={encoder_inputs_embedded:xt_encoder,seq_len_tensor:sequence_length,decoder_lengths:decoder_length,decoder_inputs:xt_decoder_input,decoder_targets:xt_decoder_output}
+            fd={encoder_inputs_embedded:mfccs,seq_len_tensor:seq_length,decoder_lengths:decoder_length,decoder_inputs:decoder_ins,decoder_targets:decoder_tars}
             iterator_initializer_hook.iterator_initializer_func = \
                 lambda sess: sess.run(
                     iterator.initializer,
-                    feed_dict={encoder_inputs_embedded:feature['A'],decoder_targets:feature['B']})
+                    feed_dict=fd)
             # Return batched (features, labels)
             return next_feature,next_label
             #return ({"A":next_encoder_inputs_embedded,"B":next_decoder_inputs,"C":next_seq_len_tensor,"D":next_decoder_lengths},next_decoder_targets)
@@ -396,4 +411,6 @@ if __name__ == "__main__":
 
 '''if __name__ == "__main__":
     train_input_fn, train_input_hook = get_train_inputs(2, train)
-    print train_input_fn()'''
+    print train_input_fn()
+    test_input_fn, test_input_hook = get_test_inputs(2, train)
+    print test_input_fn()'''
