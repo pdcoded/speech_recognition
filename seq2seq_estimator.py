@@ -136,7 +136,7 @@ def model_fn(features, labels, mode, params):
     eval_metric_ops = {}
     if mode != ModeKeys.INFER:
         loss = tf.nn.softmax_cross_entropy_with_logits(
-            labels=tf.one_hot(decoder_targets, depth=vocab_size, dtype=tf.float32),
+            labels=tf.one_hot(labels, depth=vocab_size, dtype=tf.float32),
             logits=decoder_logits)
         train_op = get_train_op_fn(loss, params)
         eval_metric_ops = get_eval_metric_ops(labels, predictions)
@@ -197,6 +197,8 @@ def architecture(inputs_,is_training,scope='seq2seq'):
     decoder_inputs_embedded = inputs_['decoder_inputs']
     seq_len_tensor = inputs_['seq_length']
     decoder_lengths = inputs_['decoder_length']
+    decoder_lengths = tf.cast(decoder_lengths, tf.int32)
+    decoder_lengths = tf.squeeze(decoder_lengths, axis = 1)
     with tf.contrib.slim.arg_scope([tf.contrib.slim.model_variable, tf.contrib.slim.variable], device="/cpu:0"):
 
         with tf.variable_scope('encoder_1') as scope:
@@ -207,7 +209,7 @@ def architecture(inputs_,is_training,scope='seq2seq'):
           #   encoder_outpus: [max_time, batch_size, num_units]
           #   encoder_state: [batch_size, num_units]
           #seq_length = tf.cast(inputs_['C'],tf.int32)
-          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=encoder_inputs_embedded,sequence_length=seq_len_tensor,time_major=True,dtype=tf.float64)
+          encoder_outputs,encoder_state = tf.nn.dynamic_rnn(encoder_cell,inputs=encoder_inputs_embedded,sequence_length=seq_len_tensor,time_major=True,dtype=tf.float32)
           #print encoder_state
         with tf.variable_scope('decoder_1') as scope:
 
@@ -221,11 +223,12 @@ def architecture(inputs_,is_training,scope='seq2seq'):
           
           attention_cell = tf.contrib.seq2seq.AttentionWrapper(cell=encoder_cell,attention_mechanism=attention_mechanism)
 
-          attention_zero = attention_cell.zero_state(batch_size=tf.shape(attention_states)[0], dtype=tf.float64)
+          attention_zero = attention_cell.zero_state(batch_size=tf.shape(attention_states)[0], dtype=tf.float32)
 
           decoder_cell = tf.contrib.seq2seq.AttentionWrapper(decoder_cell, attention_mechanism,attention_layer_size=encoder_hidden_units)
           # Decoder
           helper = tf.contrib.seq2seq.TrainingHelper(decoder_inputs_embedded,decoder_lengths, time_major=True)
+          
           decoder = tf.contrib.seq2seq.BasicDecoder(decoder_cell,helper=helper,initial_state=attention_zero.clone(cell_state=encoder_state),output_layer=layers_core.Dense(vocab_size, use_bias=False))
           # Dynamic decoding
           decoder_outputs, _,_ = tf.contrib.seq2seq.dynamic_decode(decoder,output_time_major=True)
@@ -348,7 +351,7 @@ def get_test_inputs(batch_size, test):
             on every evaluation
         """
         with tf.name_scope('Test_data'):
-            mfccs, decoder_ins, decoder_tars,seq_length,decoder_length =read_dataset('./real_batch/general_100.csv',batch_size = 90)
+            mfccs, decoder_ins, decoder_tars,seq_length,decoder_length =read_dataset('./real_batch/general_100.csv',batch_size = 10)
             #(feature,label)=pipeline(test)
             #xt_encoder,xt_decoder_output= pipeline(test)
 

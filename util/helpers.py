@@ -24,7 +24,7 @@ def batch(inputs, max_sequence_length=None):
     if max_sequence_length is None:
         max_sequence_length = max(sequence_lengths)
     
-    inputs_batch_major = np.zeros(shape=[batch_size, max_sequence_length,26], dtype=np.int32) # == PAD
+    inputs_batch_major = np.zeros(shape=[batch_size, max_sequence_length,26], dtype=np.float64) # == PAD
     
     for i, seq in enumerate(inputs):
         for j, element in enumerate(seq):

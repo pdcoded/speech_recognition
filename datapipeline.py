@@ -72,14 +72,14 @@ def read_dataset(filename,batch_size):
 	#return features, targets
 
 
-'''with tf.Session() as sess:
-	#mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length = sess.run(read_dataset('./real_batch/general_100.csv', 10,1000))
-	features, trans = sess.run(read_dataset('./real_batch/general_100.csv', 3))
-	print features
-	print trans.shape
+with tf.Session() as sess:
+	mfccs, decoder_inputs, decoder_targets,seq_length,decoder_length = sess.run(read_dataset('./real_batch/general_100.csv', 2))
+	#features, trans = sess.run(read_dataset('./real_batch/general_100.csv', 3))
+	#print features
+	print seq_length, decoder_length
 	#print targets.shape
 
-data = pd.read_csv('./small_train2.csv')
+'''data = pd.read_csv('./small_train2.csv')
 data.wav_filename = data.wav_filename.apply(audio_mfcc)
 data.transcript = data.transcript.apply(transcript_array)
 data.transcript = data.transcript.apply(decoder_input)
